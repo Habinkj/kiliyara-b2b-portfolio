@@ -22,6 +22,7 @@ Rather than sending every message through a single LLM prompt, Kiliyara classifi
 ## Architecture
 
 **The Data Flow:**
+```text
 User → Next.js (Vercel)
   → FastAPI Gateway (Render)
     → LangGraph Router ── intent? ──┐
