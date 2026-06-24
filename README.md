@@ -21,6 +21,14 @@ Rather than sending every message through a single LLM prompt, Kiliyara classifi
 
 ## Architecture
 
+**The Data Flow:**
+User → Next.js (Vercel)
+  → FastAPI Gateway (Render)
+    → LangGraph Router ── intent? ──┐
+      ├─ TECHNICAL → RAG Cascade → ChromaDB
+      └─ GENERAL → Direct LLM Response
+
+**The Stack Breakdown:**
 - **Orchestration:** LangGraph state machine, asynchronous `ainvoke` execution.
 - **LLM / Embeddings:** Gemini 2.5 Flash, gemini-embedding-001.
 - **Vector Store:** ChromaDB (local persistence).
