@@ -1,32 +1,53 @@
-# Kiliyara AI: Autonomous B2B Technical Routing Engine
+# Kiliyara — Autonomous B2B Technical Sales Agent
 
-**Live Demo:** https://kiliyara-b2b-agent.vercel.app/
-
-**Tech Stack:** Next.js, FastAPI, LangGraph, Gemini 2.5 Flash, ChromaDB, LangSmith.
-
-### The Problem
-Industrial machinery buyers cannot get fast technical answers—critical specifications are buried inside 100-page PDF catalogs, making technical sales reps a constant bottleneck. Kiliyara AI solves this by intercepting queries, answering technical specification questions instantly via local semantic search, and dynamically bypassing the database for general chatter to save API compute.
+**Live demo:** https://kiliyara-b2b-agent.vercel.app/
+**Walkthrough (5 min):** https://kiliyara-b2b-agent.vercel.app/
 
 ---
 
-### The Core Architectural Decision: The Classifier Cascade
-Sending every user message through a standard Retrieval-Augmented Generation (RAG) pipeline burns API tokens and adds massive latency to simple queries (e.g., "Hello," "Thanks"). 
+## The Problem
 
-Instead of a monolithic prompt, I engineered a **Classifier Cascade** using LangGraph:
-1. **Zero-Cost Heuristic:** The system first scans for known technical keywords (e.g., "viscosity", "voltage", "torque"). If matched, it routes to the vector database instantly (0 tokens burned).
-2. **LLM Evaluation:** If ambiguous, a lightweight LLM prompt classifies the intent. 
-3. **Execution:** General queries are routed to a low-latency chat node. Technical queries trigger a strict semantic search (`k=3`) against a local ChromaDB instance, effectively making hallucinations structurally impossible.
+B2B machinery buyers can't get fast technical answers. Specifications live buried in 100-page PDF catalogs, and getting a spec confirmed means waiting on a sales rep. Kiliyara answers technical spec questions instantly from the source documents, and when a question isn't technical, it switches into a lead-qualification mode instead of wasting a database lookup.
 
-*By intercepting the payload before database execution, this architecture drops average cost and latency by [INSERT %] on non-technical queries.*
+## How It Works: The Classifier Cascade
 
----
+Rather than sending every message through a single LLM prompt, Kiliyara classifies intent *first* using a multi-level cascade:
 
-### The Hard Part: The Asphyxiation Bug & The Router Tax
-**1. The Router Tax:** Using an LLM to route intent introduces a ~60-token overhead to complex queries. I accepted this minor tradeoff to completely eliminate the ~2,500 token hemorrhage that occurs when a user sends a simple greeting into a naive RAG system.
-**2. ASGI Thread Blocking:** Initially, synchronous LangGraph invocations (`app.invoke()`) blocked the FastAPI event loop, meaning concurrent users would choke the server. I refactored the primary routing endpoint to utilize fully asynchronous execution (`await app.ainvoke()`), keeping the worker threads unblocked under load.
+1. **Zero-Cost Heuristic (Level 1):** Scans for known technical keywords (e.g., "viscosity", "voltage"). If matched, it routes to the vector DB instantly (0 tokens burned, <1ms latency).
+2. **LLM Evaluation (Level 2):** If ambiguous, a lightweight LLM classifies the intent. 
+3. **Execution:** General questions bypass the DB entirely. Technical questions trigger a RAG pipeline (`k=3`) grounded strictly in the Chroma vector store.
 
----
+**The Impact:** [Measure this in LangSmith: across 20 test queries, __% bypassed the DB. Average response time went from __s to __s on bypassed queries, and token cost dropped ~__%.]
 
-### What I Would Change at Scale (10,000+ Concurrent Users)
-* **Vector Storage:** Local ChromaDB (`persist_directory`) is sufficient for a single-tenant prototype. For a multi-tenant B2B SaaS deployment, I would migrate to a managed vector store like Pinecone or standard PostgreSQL with `pgvector` to allow for tenant-isolated namespaces and horizontal scaling.
-* **Cold Starts:** Hosting the FastAPI gateway on Render's free tier introduces unacceptable cold-start latency (up to 50s). In production, I would containerize the microservice via Docker and deploy it to AWS ECS or Google Cloud Run for elastic, low-latency scaling.
+## Architecture
+
+- **Orchestration:** LangGraph state machine, asynchronous `ainvoke` execution.
+- **LLM / Embeddings:** Gemini 2.5 Flash, gemini-embedding-001.
+- **Vector Store:** ChromaDB (local persistence).
+- **Backend:** Python FastAPI + Pydantic, served by Uvicorn on Render.
+- **Frontend:** Next.js / React on Vercel.
+- **Observability:** LangSmith for node-level telemetry and token tracking.
+
+## Engineering Decisions Worth Calling Out
+
+**1. The Asphyxiation Bug (Sync vs. Async Execution)**
+Initially, calling synchronous LangGraph `.invoke()` inside a FastAPI endpoint blocked the ASGI event loop, meaning concurrent users would choke the server. I refactored the primary routing endpoint to utilize fully asynchronous execution (`await app.ainvoke()`), keeping worker threads unblocked under high concurrent load.
+
+**2. Failover Redundancy at the Edge**
+External LLM APIs will inevitably timeout or rate-limit. Instead of letting an unhandled exception crash the backend, the `/api/chat` endpoint is wrapped in a strict `try/except` block that logs the stack trace to the server and returns a graceful `503 Service Unavailable` JSON response matching the Pydantic schema. The frontend catches this and renders a clean "High Latency" UI state.
+
+## Known Limits & What I'd Change at Scale
+
+- **Vector Store:** ChromaDB local is fine for a single catalog prototype. At ~10k docs or real concurrency, I would migrate to PostgreSQL with `pgvector` to allow for tenant-isolated namespaces and horizontal scaling.
+- **Cold Starts:** Render's free tier cold-starts add ~50s on the first request. Acceptable for a portfolio demo, but in production, I would containerize the microservice via Docker and deploy it to AWS ECS or Google Cloud Run for elastic, low-latency scaling.
+
+## Run Locally
+
+```bash
+git clone [https://github.com/Habinkj/kiliyara-b2b-agent.git](https://github.com/Habinkj/kiliyara-b2b-agent.git)
+cd kiliyara-b2b-agent
+pip install -r requirements.txt
+
+# Create a .env file based on .env.example
+# Requires: GEMINI_API_KEY, LANGCHAIN_API_KEY (for tracing)
+uvicorn main:app --reload
